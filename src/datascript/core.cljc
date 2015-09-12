@@ -307,26 +307,24 @@
      :clj
      (compare a1 a2)))
 
-(def cmp-val-quick compare)
-
 (defn cmp-datoms-eavt-quick [^Datom d1, ^Datom d2]
   (combine-cmp
     (- (.-e d1) (.-e d2))
     (cmp-attr-quick (.-a d1) (.-a d2))
-    (cmp-val-quick  (.-v d1) (.-v d2))
+    (compare (.-v d1) (.-v d2))
     (- (.-tx d1) (.-tx d2))))
 
 (defn cmp-datoms-aevt-quick [^Datom d1, ^Datom d2]
   (combine-cmp
     (cmp-attr-quick (.-a d1) (.-a d2))
     (- (.-e d1) (.-e d2))
-    (cmp-val-quick (.-v d1) (.-v d2))
+    (compare (.-v d1) (.-v d2))
     (- (.-tx d1) (.-tx d2))))
 
 (defn cmp-datoms-avet-quick [^Datom d1, ^Datom d2]
   (combine-cmp
     (cmp-attr-quick (.-a d1) (.-a d2))
-    (cmp-val-quick  (.-v d1) (.-v d2))
+    (compare (.-v d1) (.-v d2))
     (- (.-e d1) (.-e d2))
     (- (.-tx d1) (.-tx d2))))
 
@@ -348,7 +346,7 @@
 
 ;; ----------------------------------------------------------------------------
 
-(declare hash-db hash-fdb equiv-db empty-db pr-db resolve-datom validate-attr components->pattern)
+(declare hash-db hash-fdb equiv-db empty-db pr-db resolve-datom validate-attr components->pattern indexing?)
 
 (defrecord-updatable DB [schema eavt aevt avet max-eid max-tx rschema #?(:clj __hash)]
   #?@(:cljs
@@ -393,12 +391,19 @@
                          (->> (btset/slice eavt (Datom. e nil nil nil nil))    ;; e _ _ tx
                               (filter (fn [^Datom d] (= tx (.-tx d)))))
                          (btset/slice eavt (Datom. e nil nil nil nil))         ;; e _ _ _
-                         (->> (btset/slice avet (Datom. nil a v nil nil))      ;; _ a v tx
+                         (if (indexing? db a)                                  ;; _ a v tx
+                           (->> (btset/slice avet (Datom. nil a v nil nil))      
+                                (filter (fn [^Datom d] (= tx (.-tx d)))))
+                           (->> (btset/slice aevt (Datom. nil a nil nil nil))
+                                (filter (fn [^Datom d] (and (= v (.-v d))
+                                                            (= tx (.-tx d)))))))
+                         (if (indexing? db a)                                  ;; _ a v _
+                           (btset/slice avet (Datom. nil a v nil nil))
+                           (->> (btset/slice aevt (Datom. nil a nil nil nil))
+                                (filter (fn [^Datom d] (= v (.-v d))))))
+                         (->> (btset/slice aevt (Datom. nil a nil nil nil))    ;; _ a _ tx
                               (filter (fn [^Datom d] (= tx (.-tx d)))))
-                         (btset/slice avet (Datom. nil a v nil nil))           ;; _ a v _
-                         (->> (btset/slice avet (Datom. nil a nil nil nil))    ;; _ a _ tx
-                              (filter (fn [^Datom d] (= tx (.-tx d)))))
-                         (btset/slice avet (Datom. nil a nil nil nil))         ;; _ a _ _
+                         (btset/slice aevt (Datom. nil a nil nil nil))         ;; _ a _ _
                          (filter (fn [^Datom d] (and (= v (.-v d))
                                                      (= tx (.-tx d)))) eavt)   ;; _ _ v tx
                          (filter (fn [^Datom d] (= v (.-v d))) eavt)           ;; _ _ v _
@@ -407,15 +412,17 @@
 
   IIndexAccess
   (-datoms [db index cs]
-           (btset/slice (get db index) (components->pattern db index cs)))
+    (btset/slice (get db index) (components->pattern db index cs)))
 
   (-seek-datoms [db index cs]
-                (btset/slice (get db index) (components->pattern db index cs) (Datom. nil nil nil nil nil)))
+    (btset/slice (get db index) (components->pattern db index cs) (Datom. nil nil nil nil nil)))
 
   (-index-range [db attr start end]
-                (validate-attr attr (list '-index-range 'db attr start end))
-                (btset/slice (.-avet db) (resolve-datom db nil attr start nil)
-                             (resolve-datom db nil attr end nil))))
+    (when-not (indexing? db attr)
+      (raise "Attribute" attr "should be marked as :db/index true"))
+    (validate-attr attr (list '-index-range 'db attr start end))
+    (btset/slice (.-avet db) (resolve-datom db nil attr start nil)
+                 (resolve-datom db nil attr end nil))))
 
 (defn db? [x]
   (and (satisfies? ISearch x)
@@ -486,10 +493,11 @@
 (defn attr->properties [k v]
   (cond
     (= [k v] [:db/isComponent true]) [:db/isComponent]
-    (= v :db.type/ref)               [:db.type/ref]
+    (= v :db.type/ref)               [:db.type/ref :db/index]
     (= v :db.cardinality/many)       [:db.cardinality/many]
-    (= v :db.unique/identity)        [:db/unique :db.unique/identity]
-    (= v :db.unique/value)           [:db/unique :db.unique/value]))
+    (= v :db.unique/identity)        [:db/unique :db.unique/identity :db/index]
+    (= v :db.unique/value)           [:db/unique :db.unique/value    :db/index]
+    (= [k v] [:db/index true])       [:db/index]))
 
 (defn- multimap [e m]
   (reduce
@@ -553,17 +561,26 @@
     (if (empty? datoms)
       (empty-db schema)
       (let [_ (validate-schema schema)
+            rschema (rschema schema)
+            indexed (:db/index rschema)
             #?@(:cljs
                 [ds-arr  (shim/into-array datoms)
                  eavt    (btset/-btset-from-sorted-arr (.sort ds-arr cmp-datoms-eavt-quick) cmp-datoms-eavt)
                  aevt    (btset/-btset-from-sorted-arr (.sort ds-arr cmp-datoms-aevt-quick) cmp-datoms-aevt)
-                 avet    (btset/-btset-from-sorted-arr (.sort ds-arr cmp-datoms-avet-quick) cmp-datoms-avet)
+                 avet-datoms (-> (reduce (fn [arr d]
+                                           (when (contains? indexed (.-a d))
+                                             (.push arr d))
+                                           arr)
+                                         #js [] datoms)
+                                 (.sort cmp-datoms-avet-quick))
+                 avet    (btset/-btset-from-sorted-arr avet-datoms cmp-datoms-avet)
                  max-eid (:e (first (-rseq eavt)))]
                 :clj
-                [eavt    (apply btset/btset-by cmp-datoms-eavt datoms)
-                 aevt    (apply btset/btset-by cmp-datoms-aevt datoms)
-                 avet    (apply btset/btset-by cmp-datoms-avet datoms)
-                 max-eid (:e (first (rseq eavt)))])
+                [eavt        (apply btset/btset-by cmp-datoms-eavt datoms)
+                 aevt        (apply btset/btset-by cmp-datoms-aevt datoms)
+                 avet-datoms (filter (fn [^Datom d] (contains? indexed (.-a d))) datoms)
+                 avet        (apply btset/btset-by cmp-datoms-avet avet-datoms)
+                 max-eid     (:e (first (rseq eavt)))])
             max-tx (transduce (map (fn [^Datom d] (.-tx d))) max tx0 eavt)]
         (map->DB {
           :schema  schema
@@ -572,7 +589,7 @@
           :avet    avet
           :max-eid max-eid
           :max-tx  max-tx
-          :rschema (rschema schema)
+          :rschema rschema
           #?@(:clj [:__hash (atom nil)])})))))
 
 (defn- equiv-db-index [x y]
@@ -678,6 +695,10 @@
           :cljs [^boolean component?]) [db attr]
   (is-attr? db attr :db/isComponent))
 
+(defn #?@(:clj  [^Boolean indexing?]
+          :cljs [^boolean indexing?]) [db attr]
+  (is-attr? db attr :db/index))
+
 (defn entid [db eid]
   {:pre [(db? db)]}
   (cond
@@ -764,17 +785,18 @@
 
 (defn- with-datom [db ^Datom datom]
   (validate-datom db datom)
-  (if (.-added datom)
-    (-> db
-      (update-in [:eavt] btset/btset-conj datom cmp-datoms-eavt-quick)
-      (update-in [:aevt] btset/btset-conj datom cmp-datoms-aevt-quick)
-      (update-in [:avet] btset/btset-conj datom cmp-datoms-avet-quick)
-      (advance-max-eid (.-e datom)))
-    (let [removing (first (-search db [(.-e datom) (.-a datom) (.-v datom)]))]
-      (-> db
-        (update-in [:eavt] btset/btset-disj removing cmp-datoms-eavt-quick)
-        (update-in [:aevt] btset/btset-disj removing cmp-datoms-aevt-quick)
-        (update-in [:avet] btset/btset-disj removing cmp-datoms-avet-quick)))))
+  (let [indexing? (indexing? db (.-a datom))]
+    (if (.-added datom)
+      (cond-> db
+        true      (update-in [:eavt] btset/btset-conj datom cmp-datoms-eavt-quick)
+        true      (update-in [:aevt] btset/btset-conj datom cmp-datoms-aevt-quick)
+        indexing? (update-in [:avet] btset/btset-conj datom cmp-datoms-avet-quick)
+        true      (advance-max-eid (.-e datom)))
+      (let [removing (first (-search db [(.-e datom) (.-a datom) (.-v datom)]))]
+        (cond-> db
+          true      (update-in [:eavt] btset/btset-disj removing cmp-datoms-eavt-quick)
+          true      (update-in [:aevt] btset/btset-disj removing cmp-datoms-aevt-quick)
+          indexing? (update-in [:avet] btset/btset-disj removing cmp-datoms-avet-quick))))))
 
 (defn- transact-report [report datom]
   (-> report
