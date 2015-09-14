@@ -2,7 +2,7 @@
 
 > What if creating a database would be as cheap as creating a Hashmap?
 
-An immutable in-memory database and Datalog query engine in ClojureScript.
+An immutable in-memory database and Datalog query engine in Clojure and ClojureScript.
 
 DataScript is meant to run inside the browser. It is cheap to create, quick to query and ephemeral. You create a database on page load, put some data in it, track changes, do queries and forget about it when the user closes the page.
 
@@ -59,9 +59,11 @@ For more examples, see [our acceptance test suite](test/datascript/test/).
 :dependencies [
   [org.clojure/clojure "1.7.0"]
   [org.clojure/clojurescript "0.0-3291"]
-  [datascript "0.11.6"]
+  [datascript "0.12.1"]
 ]
 ```
+
+_WARN:_ *ClojureScript versions 1.7.48, 1.7.58 and 1.7.107 [break DataScript](https://github.com/tonsky/datascript/issues/108). Use either 1.7.28, 1.7.122 or newer*
 
 _Note:_ DataScript 0.11.3 and later requires CLJS 0.0-3291 or later
 
@@ -137,7 +139,7 @@ _Note:_ DataScript 0.11.0 and later will only work with CLJS 0.0-3196 and later
 DataScript can be used from any JS engine without additional dependencies:
 
 ```html
-<script src="https://github.com/tonsky/datascript/releases/download/0.11.6/datascript-0.11.6.min.js"></script>
+<script src="https://github.com/tonsky/datascript/releases/download/0.12.1/datascript-0.12.1.min.js"></script>
 ```
 
 or as a CommonJS module ([npm page](https://www.npmjs.org/package/datascript)):
@@ -228,12 +230,11 @@ Expected soon:
 ## Differences from Datomic
 
 * DataScript is built totally from scratch and is not related by any means to the popular Clojure database Datomic
-* Runs in a browser
+* Runs in a browser and/or in a JVM
 * Simplified schema, not queryable
-* No need to declare attributes except for `:db/cardinality` `:db.cardinality/many` and `:db/valueType` `:db.type/ref`
-* Any type can be used for values. It’s better if values are immutable and fast to compare
-* No `db/ident` attributes, keywords are _literally_ attribute values, no integer id behind them
-* AVET index for all datoms
+* Attributes do not have to be declared in advance. Put them to schema only when you need special behaviour from them
+* Any type can be used for values
+* No `:db/ident` attributes, keywords are _literally_ attribute values, no integer id behind them
 * No schema migrations
 * No cache segments management, no laziness. Entire DB must reside in memory
 * No facilities to persist, transfer over the wire or sync DB with the server

@@ -1,7 +1,38 @@
-# WIP
+# 0.12.1
 
-- [ BREAKING ] Values you put to database under the same attribute should be comparable. Maps and list are not comparable by default, and vectors are compared value-by-value
+- `db-init` respects `:db/index` property
+
+# 0.12.0
+
+[ BREAKING ] Introducing new `:db/index` schema attribute:
+
+- Attributes are not put to AVET _by default_ anymore
+- Following attributes are put to AVET:
+
+  - `:db/index true`
+  - `:db/unique :db.unique/identity`
+  - `:db/unique :db.unique/value`
+  - `:db/valueType :db.type/ref`
+
+- All attributes put to AVET should be comparable. Note: maps and list are not comparable by default, vectors are compared value-by-value
 - [ BREAKING ] Min/max aggregation functions will only work on a comaparable values
+
+Benefits:
+
+- You can finally store _any_ trash easily and reliably in DataScript database: maps, vectors, functions, JS objects. It doesn’t even have to be comparable. Just do not mark it as `:db/index` and do not make it `:db.cardinality/many`
+- Faster transactions. There’s ⅓ less indexes to fill
+- Good defaults. Most cases where you’ll probably use AVET (lookup by value)—lookup refs, external ids, references—they are all indexed by default
+
+Caveats:
+
+- Your code may break (see below)
+- Queries can do lookup by value event without `:db/index` attribute, but it’ll be slower
+
+Migration procedure:
+
+- Check your code for `datoms`, `seek-datoms` calls with `:avet` index, and `index-range` call
+- Check your queries to see if they utilize AVET index. It happens when you use this pattern: `[?free-var <constant-attr> <constant-value>]`
+- Mark necessary attributes with `:db/index true` in the schema
 
 # 0.11.6
 
